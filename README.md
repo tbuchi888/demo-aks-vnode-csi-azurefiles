@@ -44,6 +44,12 @@ virtual-node-aci-linux              Ready    agent   25d   v1.19.10-vk-azure-aci
 # 3. 仮想ノード上へ Pod をデプロイするにはいくつか設定が必要
 仮想ノードの[サンプルアプリ](https://docs.microsoft.com/ja-jp/azure/aks/virtual-nodes-portal#deploy-a-sample-app)を確認すると、[toleration](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/) と[nodeSelector](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/) の定義がされていることが分かります。
 
+https://docs.microsoft.com/ja-jp/azure/aks/virtual-nodes-portal#deploy-a-sample-app
+
+https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+
+https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/
+
 * 仮想ノードへの Pod スケジューリングを許可するために、`tolerations`を設定する必要がある
     * 重要な Pod が意図せずに仮想ノードへスケジュールされないように 仮想ノードには[Taints](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/)が設定されているため、`tolerations`により回避する設定を追加
 * さらに、`nodeSelector`を設定することで、仮想ノード上に限定して Pod を動かすことが可能
@@ -84,7 +90,9 @@ spec:
 
 # 4. Azure ファイル共有に関する、仮想ノード使用時の制限事項がある
 通常の AKS ノードと比べて、仮想ノードを利用する場合、いくつか制限事項があり、ファイル共有関連で以下の制限がありますので、そちらを参考に試してみます。
-その他、制限事項の詳細はこちらの[ドキュメント](https://docs.microsoft.com/ja-jp/azure/aks/virtual-nodes)を参照。
+その他、制限事項の詳細はこちらのドキュメントを参照。
+
+https://learn.microsoft.com/ja-jp/azure/aks/virtual-nodes#known-limitations
 
 > Azure Files 共有のサポート[汎用 V2](https://learn.microsoft.com/ja-jp/azure/storage/common/storage-account-overview#types-of-storage-accounts) と[汎用 V1 ](https://learn.microsoft.com/ja-jp/azure/storage/common/storage-account-overview#types-of-storage-accounts)をマウントするボリューム。 ただし、仮想ノードでは現在、[永続ボリューム](https://learn.microsoft.com/ja-jp/azure/aks/concepts-storage#persistent-volumes)と[永続ボリューム要求](https://learn.microsoft.com/ja-jp/azure/aks/concepts-storage#persistent-volume-claims)がサポートされていません。 [Azure Files 共有を含むボリュームをインライン ボリュームとして](https://learn.microsoft.com/ja-jp/azure/aks/azure-csi-files-storage-provision#mount-file-share-as-an-inline-volume)マウントする手順に従います。
 
@@ -96,6 +104,8 @@ spec:
 
 ## 4.1 Azure ファイル共有の事前準備
 それでは、[Azure ファイル共有を作成する](https://learn.microsoft.com/ja-jp/azure/aks/azure-csi-files-storage-provision#create-an-azure-file-share)に従ってファイル共有のマウント準備をしていきます。
+
+https://learn.microsoft.com/ja-jp/azure/aks/azure-csi-files-storage-provision#create-an-azure-file-share
 
 ### 4.1.1. Azure ファイル共有を作成する
 * AKS_PERS_XXX の環境変数の値を自身の環境に置き換えて実行します。
@@ -138,7 +148,7 @@ kubectl create secret generic azure-secret --from-literal=azurestorageaccountnam
 
 以上で、ファイル共有を AKS で利用する準備が整いました。
 
-## 4.2 仮想ノードはファイル共有の PV （ Persitent volume ）、PVC （ Persistent Volume Claim ）としてのマウントをサポートしていない
+## 4.2 仮想ノードはファイル共有の PV （ Persitent volume ）、PVC （ Persistent Volume Claim ）マウントをサポートしていない
 ::: note
 __結論から言うと、こちらの方法がハマりポイントです__
 なんども言いますが、公式ドキュメントの制約事項にも、加筆した通り
@@ -329,6 +339,8 @@ __PV （ Persitent volume ）、PVC （ Persistent Volume Claim ）を利用で�
 それでは、正規の方法で試してみます。
 AKS 仮想ノードは現在（本記事執筆時点）、PV （ Persitent volume ）、PVC （ Persistent Volume Claim ）をサポートしていないため、ファイル共有をインラインボリュームとしてマウントしていきます。
 さきほどの Deployment より、PV/PVC を利用する形から、[ファイル共有をインライン ボリュームとしてマウントする](https://learn.microsoft.com/ja-jp/azure/aks/azure-csi-files-storage-provision#mount-file-share-as-an-inline-volume) 方法で Pod から直接インラインマウントします。
+
+https://learn.microsoft.com/ja-jp/azure/aks/azure-csi-files-storage-provision#create-an-azure-file-share
 
 ``` dp-csi-azurefiles-inline-vol-acinode.yaml
 apiVersion: apps/v1
