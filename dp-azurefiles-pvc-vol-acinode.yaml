@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-azurefiles-pvc-acinode
+  labels:
+    node: aci
+    app: nginx-azurefiles-pvc-acinode
+spec:
+  minReadySeconds: 30
+  strategy:
+    type: RollingUpdate
+  replicas: 4
+  selector:
+    matchLabels:
+      node: aci
+      app: nginx-azurefiles-pvc-acinode
+  template:
+    metadata:
+      name: nginx-azurefiles-pvc-acinode
+      labels:
+        app: nginx-azurefiles-pvc-acinode
+        node: aci
+    spec:
+      containers:
+      - image: docker.io/nginx:1.20
+        name: nginx-azurefiles-pvc-acinode
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - mountPath: "/usr/share/nginx/html"
+          name: azurefilespvc
+      volumes:
+      - name: azurefilespvc
+        persistentVolumeClaim:
+          claimName: azurefile
+      nodeSelector:
+        kubernetes.io/role: agent
+        beta.kubernetes.io/os: linux
+        type: virtual-kubelet
+      tolerations:
+      - key: virtual-kubelet.io/provider
+        operator: Exists
+      - key: azure.com/aci
+        effect: NoSchedule

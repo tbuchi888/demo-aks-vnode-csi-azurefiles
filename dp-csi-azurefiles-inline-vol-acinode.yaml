@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-azurefiles-inline-vol-aci
+  labels:
+    node: aci
+    app: nginx-azurefiles-inline-vol-aci
+spec:
+  strategy:
+    type: RollingUpdate
+  replicas: 4
+  selector:
+    matchLabels:
+      node: aci
+      app: nginx-azurefiles-inline-vol-aci
+  template:
+    metadata:
+      name: nginx-azurefiles-inline-vol-aci
+      labels:
+        app: nginx-azurefiles-inline-vol-aci
+        node: aci
+    spec:
+      containers:
+      - image: docker.io/nginx:1.20
+        name: nginx-azurefiles-inline-vol-aci
+        ports:
+        - containerPort: 80
+        volumeMounts:
+        - mountPath: "/usr/share/nginx/html"
+          name: azurefile
+# Mount directly from Pod using Secret via azureFile instead of pvc
+      volumes:
+      - name: azurefile
+        csi:
+          driver: file.csi.azure.com
+          readOnly: false
+          volumeAttributes:
+            secretName: azure-secret  # required
+            shareName: aksshare  # required
+            mountOptions: "dir_mode=0777,file_mode=0777,cache=strict,actimeo=30,nosharesock"  # optional
+      nodeSelector:
+        kubernetes.io/role: agent
+        beta.kubernetes.io/os: linux
+        type: virtual-kubelet
+      tolerations:
+      - key: virtual-kubelet.io/provider
+        operator: Exists
+      - key: azure.com/aci
+        effect: NoSchedule
