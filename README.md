@@ -1,59 +1,42 @@
-# demo-aks-vnode-csi-azurefiles
----
 ---
 title: AKS 仮想ノード( ACI ) 上の Pod から Azure ファイル共有をマウントする
 tags: Azure AKS aci kubernetes virtual-kubelet
 author: tbuchi888
 slide: false
 ---
+[Azure Advent Calendar 2021](https://qiita.com/advent-calendar/2021/azure) 16日目の記事です。
+
+2023/04/04追記
+> こちらの記事は、古い内容となりますので、最新記事については以下を確認してください。
+> https://qiita.com/tbuchi888/items/c7f9024a48c25b0445be
 
 # 0. はじめに
 Azure Kubernetes Service (以降 AKS ) は
+
 * クラスター内の Worker node 数（ node pool ）を、需要に応じて、設定範囲内で自動で増減可能なオートスケーラー機能に加えて
 * クラスターの許容量を超える急なバーストトラフィック等への対応として、OSS の Kubernetes kubelet の実装である、CNCF の [Virtual Kubelet](https://www.cncf.io/projects/virtual-kubelet/) を利用して、仮想ノードとして Azure Container Instances (以降 ACI )上に Pod をデプロイ可能です。
 
-今回、ACI 仮想ノード（Virtual Node）上の複数 Pod より、ReadWriteMany 可能な Azure Files の共有フォルダ（ Azure ファイル共有）をマウントする方法について、以前書いたこちらの記事をベースに、CSI Storage Driver の内容へサンプルの Yaml などrewriteした記事となります。
-なお、 仮想ノード（Virtual Node）の概念や利用方法等は、以前の記事の方が、詳しく書いていますので合わせて参考にしていただければ幸いです。
+今回、ACI 仮想ノード上の複数 Pod より、ReadWriteMany 可能な Azure Files の共有フォルダ（ Azure ファイル共有）をマウントする際に、すこしハマリましたので、やり方やハマリポイントなどを記事にしました。
 
-:::note info
-Kubernetes バージョン 1.26 以降、in-tree persistent volume である kubernetes.io/azure-file は非推奨となりサポートされなくなくなるのに伴い、AKS の公式ドキュメント含めて、[CSI Storage Driver](https://learn.microsoft.com/ja-jp/azure/aks/csi-storage-drivers) を利用する形へシフトしていますので、そちらにに合わせて今回記事を rewrite しました
-:::
+結構なボリュームになってしまったので、結論だけ確認したい場合は、最後の[まとめ](https://qiita.com/tbuchi888/items/cf82d0d9ab7f8bb47ec9#5-%E3%81%BE%E3%81%A8%E3%82%81)を確認してください。
 
-:::note info
-実行結果等を含めて本記事は、2023 年 3 月 14 日時点のものとなります
-:::
+なお、通常の AKS ノード（ Virtual Machine Scale Sets による node pool ）上の Pod から、Azure ファイル共有のマウントについては PV / PVC を利用した、静的プロビジョニングによるSMBでのマウントや、[CSI（ Container Storage Interface ）ストレージドライバー](https://docs.microsoft.com/ja-jp/azure/aks/csi-storage-drivers)を利用した、NFS の動的プロビジョニングなどは、AKSクラスタのバージョンによる考慮事項は多少あるものの、Kubernetes のスキルがあれば、特に問題なく利用できるのではと思います。
+
+その他、本記事の内容は、2021 年 12 月 6 日時点の情報をもとに作成しています。
 
 # 1. 実行環境について
 本記事は、以下 AKS バージョンで試しています。
 
 ```
 $ kubectl get node
-NAME                                STATUS   ROLES   AGE     VERSION
-aks-agentpool-19611256-vmss000000   Ready    agent   5d23h   v1.24.9
-virtual-node-aci-linux              Ready    agent   5d23h   v1.19.10-vk-azure-aci-1.4.8
+NAME                                STATUS   ROLES   AGE   VERSION
+aks-agentpool-11590259-vmss000000   Ready    agent   34d   v1.20.9
+aks-agentpool-11590259-vmss000001   Ready    agent   34d   v1.20.9
+aks-agentpool-11590259-vmss000002   Ready    agent   34d   v1.20.9
+virtual-node-aci-linux              Ready    agent   34d   v1.19.10-vk-azure-aci-v1.4.1
 ```
 
-# CSI Storage Driver 利用時の前回記事からの変更点（要点）
-執筆時点でも、仮想ノード（Virtual Node）では、Persistent Volumes / Persitent Volume Claims はサポートされておらず、CSI Storage Driver を利用して PV/PVC をマウントしようとすると前回の記事と同様に以下のエラーにより、Podが起動されません。
-
-```
-$ kubectl get po
-NAME                                            READY   STATUS           RESTARTS   AGE
-nginx-azurefiles-pvc-acinode-7d55d7679b-b8k2h   0/1     ProviderFailed   0          26s
-$ kubectl describe pod nginx-azurefiles-pvc-acinode-7d55d7679b-b8k2h
-〜〜〜 中略 〜〜〜
-Events:
-  Type     Reason                Age                From                                   Message
-  ----     ------                ----               ----                                   -------
-  Normal   Scheduled             49s                default-scheduler                      Successfully assigned default/nginx-azurefiles-pvc-acinode-7d55d7679b-b8k2h to virtual-node-aci-linux
-  Warning  ProviderCreateFailed  2s (x13 over 49s)  virtual-node-aci-linux/pod-controller  pod nginx-azurefiles-pvc-acinode-7d55d7679b-b8k2h requires volume azurefilespvc which is of an unsupported type
-```
-
-CSI Storage Driver 利用時も、仮想ノード（Virtual Node）上の複数 Pod より、ReadWriteMany 可能な Azure Files の共有フォルダ（Azure ファイル共有）をマウントする方法は、従来通り Inline volume によりマウントします。
-
-https://learn.microsoft.com/ja-jp/azure/aks/azure-csi-files-storage-provision.md#mount-file-share-as-an-inline-volume
-
-# 2. 事前準備
+# 2. 事前準備と下調べ
 + AKS で仮想ノードを有効化します。
     + 仮想ノードを有効化するには、AKS クラスタで`Azure CNI` ネットワーク プラグインを利用する必要があります。
     + 本記事では有効化手順の説明をしませんが、詳細は以下を参考にしてください。
@@ -61,6 +44,7 @@ https://learn.microsoft.com/ja-jp/azure/aks/azure-csi-files-storage-provision.md
 + 仮想ノード使用にあたって
     + 仮想ノード上へ Pod をデプロイするにはいくつか設定が必要（後述）
     + AKS での仮想ノード使用時の制限事項がいくつかある（後述）
+
 
 # 3. 仮想ノード上へ Pod をデプロイするにはいくつか設定が必要
 仮想ノードの[サンプルアプリ](https://docs.microsoft.com/ja-jp/azure/aks/virtual-nodes-portal#deploy-a-sample-app)を確認すると、[toleration](https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/) と[nodeSelector](https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/) の定義がされていることが分かります。
@@ -99,21 +83,15 @@ spec:
         operator: Exists
 ```
 
-# 4. Azure ファイル共有に関する、仮想ノード使用時の既知の制限事項
+
+# 4. Azure ファイル共有に関する、仮想ノード使用時の制限事項がある
 通常の AKS ノードと比べて、仮想ノードを利用する場合、いくつか制限事項があり、ファイル共有関連で以下の制限があったので、そちらを参考に試してみます。
 その他、制限事項の詳細はこちらの[ドキュメント](https://docs.microsoft.com/ja-jp/azure/aks/virtual-nodes)を参照。
 
-> Azure Files 共有のサポート[汎用 V2](https://learn.microsoft.com/ja-jp/azure/storage/common/storage-account-overview#types-of-storage-accounts) と[汎用 V1](https://learn.microsoft.com/ja-jp/azure/storage/common/storage-account-overview#types-of-storage-accounts) をマウントするボリューム。 [Azure Files 共有を含むボリューム](https://learn.microsoft.com/ja-jp/azure/aks/azure-files-csi)をマウントする手順に従います。
-
-上記について、`Azure Files 共有を含むボリューム`に関するドキュメントのリンク先に誤りがあることと、こちらの表現だけでは分かりづらいのですが、実際には以下のような制限と対処方法が必要です。（公式ドキュメントへ修正版のPull Request送信中です）
-
-> Volume mounting Azure Files share support [General-purpose V2](https://learn.microsoft.com/ja-jp/azure/storage/common/storage-account-overview#types-of-storage-accounts) and [General-purpose V1](https://learn.microsoft.com/ja-jp/azure/storage/common/storage-account-overview#types-of-storage-accounts). However virtual nodes currently don't support [Persistent Volumes](https://learn.microsoft.com/ja-jp/azure/aks/concepts-storage.md#persistent-volumes) and [Persistent Volume Claims](https://learn.microsoft.com/ja-jp/azure/aks/concepts-storage.md#persistent-volume-claims). Follow the instructions for mounting [a volume with Azure Files share as an inline volume](https://learn.microsoft.com/ja-jp/azure/aks/azure-csi-files-storage-provision.md#mount-file-share-as-an-inline-volume).
-
-日本語では以下のようになるかと思います。
-> Azure Files 共有の[汎用 V2](https://learn.microsoft.com/ja-jp/azure/storage/common/storage-account-overview#types-of-storage-accounts) と[汎用 V1](https://learn.microsoft.com/ja-jp/azure/storage/common/storage-account-overview#types-of-storage-accounts) ボリュームマウントをサポートしています。しかしながら、仮想ノードでは [Persistens Volumes](https://learn.microsoft.com/ja-jp/azure/aks/concepts-storage.md#persistent-volumes) および [Persistent Volume Claim](https://learn.microsoft.com/ja-jp/azure/aks/concepts-storage.md#persistent-volume-claims) をサポートしていません。[Azure Files共有でボリュームをインラインボリュームとしてマウントする](https://learn.microsoft.com/ja-jp/azure/aks/azure-csi-files-storage-provision.md#mount-file-share-as-an-inline-volume))手順に従ってください。
+> Azure Files 共有のサポート汎用 v1をマウントするボリューム。 [Azure Files 共有を含むボリューム](https://docs.microsoft.com/ja-jp/azure/aks/azure-files-volume)をマウントする手順に従います。
 
 ## 4.1 Azure ファイル共有の事前準備
-それでは、ファイル共有に関連する仮想ノードの制限事項（）、[Azure Files 共有を含むボリューム](https://docs.microsoft.com/ja-jp/azure/aks/azure-files-volume)に従ってファイル共有をマウントの準備をしていきます。
+それでは、ファイル共有に関連する仮想ノードの制限事項（日本語も少し微妙なのですが、原文もほぼ同じような内容のため）、[Azure Files 共有を含むボリューム](https://docs.microsoft.com/ja-jp/azure/aks/azure-files-volume)に従ってファイル共有をマウントの準備をしていきます。
 
 ### 4.1.1. Azure ファイル共有を作成する
 * AKS_PERS_XXX の環境変数の値を自身の環境に置き換えて実行します。
@@ -465,3 +443,4 @@ Pod を仮想ノード上で動かすために
 # 7. さいごに
 最後まで、閲覧ありがとうございます。
 今後 ACI 仮想ノード上の複数 Pod より、ReadWriteMany 可能な Azure Files の共有フォルダをマウントする際に、こちらのハマりポイントなど、お役に立てれば幸いです。
+---
